@@ -1,0 +1,59 @@
+---
+title: "TB_Brazil"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+df <- read_csv("~/workspace/SAFE/code/SLAM_ML/dshenker/RFSLAM_Package/RFSLAM/vignettes/sim_data.csv")
+head(df)
+```
+
+
+```{r}
+df[df$subjid == "a101083",]
+```
+
+```{r}
+df[df$visit_type == "M24","subjid"]
+```
+
+```{r}
+df[df$visit_type == "Exit",]
+```
+
+```{r}
+unique(df[df$visit_type == "Exit", "subjid"])
+```
+
+```{r}
+unique(df[df$visit_type == "M24", "subjid"])
+```
+
+
+```{r}
+response_cols <- c("final_cohaoutb___1", "final_cohaoutb___2", "final_cohaoutb___3", "final_cohaoutb___4", "final_cohaoutb___5", "final_cohaoutb___6", "final_cohaoutb___7", "final_cohaoutb___8", "final_cohaoutb___9", "final_cohaoutb___10", "final_cohaoutb___11")
+ids <- unique(df$subjid)
+for (i in 1:length(ids)) {
+  id = ids[i]
+  print(sum(rowSums(is.na(df[df$subjid == id, response_cols])) != 11))
+}
+```
+
+```{r}
+response_cols <- c("final_cohaoutb___1", "final_cohaoutb___2", "final_cohaoutb___3", "final_cohaoutb___4", "final_cohaoutb___5", "final_cohaoutb___6", "final_cohaoutb___7", "final_cohaoutb___8", "final_cohaoutb___9", "final_cohaoutb___10", "final_cohaoutb___11")
+ids <- unique(df$subjid)
+for (i in 1:length(ids)) {
+  id = ids[i]
+  print(id)
+  print(rowSums(df[df$subjid == id, response_cols], na.rm = TRUE))
+}
+```
+
+```{r}
+df[df$subjid == "a106084", c("visit_type", "bl_visdat", response_cols)]
+```
+

@@ -1,0 +1,21 @@
+Variable,Key,Type,Units
+q6, CPIU interval since start of study,Other,
+day, days since start of study,Other,
+trt, treatment type,Other,
+age, age,Other,
+sex,sex,Other,
+ascites,ascites,Other,
+hepato,hepato,Other,
+spiders,spiders,Other,
+edema,edema,Other,
+bili,bili,Other,
+chol,chol,Other,
+albumin,albumin,Other,
+alk.phos,alk.phos,Other,
+ast,ast,Other,
+platelet,platelet,Other,
+protime,protime,Other,
+stage,stage,Other,
+days_since_cpiu_start, days_into_inverval,Other
+
+

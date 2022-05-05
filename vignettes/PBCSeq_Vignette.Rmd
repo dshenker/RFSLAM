@@ -1,0 +1,209 @@
+ ---
+title: "PC"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+The vignette presesented here describes how to prepare data for RF-SLAM and make use of the necessary packages to both train and evaluate an RF-SLAM model. For the purpose of the example, we will use the Mayo Clinic Primary Biliary Cirrhosis sequential data described here: https://stat.ethz.ch/R-manual/R-patched/library/survival/html/pbcseq.html.
+
+The task we are trying to solve is to predict the death of a patient within the next 300 days at each time point. 
+
+To begin, let's load some packages we will need for the data processing, as well as RF-SLAM itself.
+
+```{r}
+library(ggRandomForests)
+library(rfSLAM)
+library(plyr)
+library(dplyr)
+library(grid)
+library(gridExtra)
+library(ggsci)
+library(rpart)
+library(splines)
+library(rpart.plot)
+library(purrr)
+library(readr)
+library(slider)
+library(RFSLAM)
+library(tidyr)
+library(pROC)
+library(ggplot2)
+```
+
+
+
+Let's load in the data. Additionally, we load a csv file which maps variables to their descriptions, called `var_key`. This is used for plotting feature importance later on.
+```{r}
+data(pbc, package="survival")
+var_key <- read_csv("~/workspace/SAFE/code/SLAM_ML/dshenker/RFSLAM_PACKAGE/RFSLAM/vignettes/var_key.csv") #example variable key
+```
+
+RF-SLAM currently only supports binary classification. Thus, we convert the labels here into ones where we have either a death or no death.
+```{r}
+pbcseq$status <- ifelse(pbcseq$status == 2, 1, 0)
+
+library(dplyr)
+pbcseq <- pbcseq %>% mutate(next_id = lead(id))
+
+pbcseq[is.na(pbcseq$next_id), "next_id"] <- max(pbcseq$id)
+
+pbcseq$death <- 0
+pbcseq[(pbcseq$id != pbcseq$next_id) & (pbcseq$status == 1), "death"] <- 1
+pbcseq <- pbcseq %>% select(-c(next_id))
+```
+
+
+
+RF-SLAM requires data to be in the format where there is one row per each patient's CPIU. A CPIU is a person-time interval that has a length determine by the user based on what is clinically relevant. Here, we choose to use CPIU length's of 100 days. To start, We need to figure out what the maximum time multiple of 100 days is for each patient.
+```{r}
+pbcseq$max_cpiu <- (round_any(pbcseq$futime, 100, f = floor) / 100) + 1
+```
+
+
+In our dataset, we do not have data that is exactly at each 100 days of treatment. Thus, we will need to create a bigger dataset and fill in the necessary gaps in order for RF-SLAM to function properly. Here, we calculate how big a dataframe we need based on the `max_cpiu` values just calculated.
+```{r}
+final_cpius <- pbcseq %>% group_by(id) %>% dplyr::summarise(max(max_cpiu))
+colnames(final_cpius) <- c("id", "max(cpiu)")
+nrows_needed <- sum(final_cpius$`max(cpiu)`)
+```
+
+Here we create the dataframe that extends out to as many cpius as needed, leaving the multiples of 100 blank.
+```{r}
+full_df <- as.data.frame(matrix(nrow = nrows_needed, ncol = 3))
+colnames(full_df) <- c("id", "cpiu", "day")
+count <- 0
+for (i in 1:nrow(final_cpius)) {
+  days <- 0
+  curr_id <- final_cpius[i, "id"]
+  for (j in 1:final_cpius[i, "max(cpiu)"]$'max(cpiu)') {
+    full_df[count,] <- c(curr_id, j, days)
+    days <- days + 100
+    count <- count + 1
+  }
+}
+```
+
+Now let's merge together our actual dataset and the blank one we made to create the final dataframe where we will still have a lot of NA values.
+```{r}
+pbc_tomerge <- pbcseq %>% select(-c(max_cpiu))
+
+test <- full_df %>% full_join(pbc_tomerge, by = c("id", "day"))
+test <- arrange(test, id, day)
+```
+
+fix this one weird issue (NOTE TO DANIEL: INVESTIGATE LATER)
+```{r}
+test[1, "cpiu"] <- 1
+```
+
+
+Now to fill in the blanks, we fill in the cpiu's without any data using the most recent covariates. This means that if, for example, the covariates change at day 98, the cpiu starting at day 100 will be filled with the covariates from day 98. We achieve this by grouping by the `id` and then using the `fill` function.
+```{r}
+test <- test %>% dplyr::group_by(id) %>% fill(colnames(test), .direction = "down")
+test <- data.frame(test)
+test <- test[!is.na(test$day),]
+```
+
+
+To capture the fact that every interval is not exactly 100 days, RF-SLAM using risk-time values that tell us for what fraction of a full CPIU the current row pertains to. For example, if a row has a start day of 100 and the next row has a start day of 200, we know that this is a full CPIU and the risk time is 1.0. On the other hand, if a row starts at day 190 and the next row is at 200 days, the risk time is 0.1. Here, we create a column with the risk time values and clean up the data a bit.
+```{r}
+test <- test %>% mutate(next_day = lead(day))
+test$next_day <- ifelse((test$next_day == 0) | is.na(test$next_day), test[,"futime"], test[,"next_day"])
+test$risk_time <- (test$next_day - test$day) / 100
+
+test <- test %>% select(-c(futime, next_day))
+
+test <- test %>% mutate(next_id = lead(id), next_death = lead(death))
+test[(test$next_id == test$id) & (test$death == 1), "death"] <- 0
+
+test <- test %>% select(-c(next_death))
+
+test$risk_time <- ifelse(test$risk_time == 0, 1, test$risk_time)
+```
+
+Now, one naive approach to modeling the task is to predict whether a patient will die based on the current row's data. However, a more informative task is to create labels using look-ahead, and ask if a patient is going to die 300 days into the future. The code block below creates labels that do exactly that.
+```{r}
+create_labels <- function(df, x = 5) {
+  labels <- unlist(slide_index(df$death, df$day, max, .after = 300))
+  df$label <- labels
+  return(df)
+}
+
+final_df <- data.frame(test %>% dplyr::group_by(id) %>% dplyr::group_modify(.f = create_labels))
+```
+
+
+
+Finally, let's do some data cleaning to turn `sex` into a numeric value and create the extra `int.n` column that we need for the RF-SLAM functions.
+```{r}
+final_df$sex <- ifelse(final_df$sex == 'f', 1, 0)
+
+final_df <- final_df %>% select(-c(next_id, death))
+
+final_df$int.n <- final_df$cpiu
+final_df <- filter(final_df, !duplicated(final_df[,c("id", "label")]) | label == 0) #ask about whether we should do this step or not
+
+final_df$days_since_cpiu_start <- final_df$day - (final_df$cpiu - 1)*100
+```
+
+We are now ready to actually use RF-SLAM for modeling. In addition to the labels and features for modeling, RF-SLAM needs to know where to find the patient id's, risk times, CPIU values, and how to create folds for cross validation. Here, we use the `status` variable, which denotes whether or not a patient died EVER in order to have consistency across creating folds. 
+
+Then, we can use the `turn_rf_params()` function to test different user-specified parameter combinations to summarize how the AUC values vary across them. In particular, RF-SLAM returns a weighted average of the time-varying AUC's under each parameter combination where the values are weighted based on the number of patients available in each particular CPIU. A detailed description of each parameter is as follows:
+- df: the dataframe 
+- target: the name of the column with the target variable values
+- id_col: the name of the column with the patient id's
+- risk_time_col: the name of the column with the risk time values
+- patient_count_col: the name of the column counting the entries for each patient
+- time_col: the name of the column with the cpiu numbers
+- drop: variables that should be dropped before modeling (usually should just be the folds_stratifier variable)
+- ntree_trys: the different number of trees to try in the random forest model
+- nodedepth_trys: the different number of node depth values to try in the random forest model
+- nsplit_trys: the different number of variable split number values to try in the random forest model
+- n.folds: the number of folds to use for cross validation
+- folds_stratifier: the variable to be splitting on for the different folds. In particular, we will always keep all of a patient's data in a certain fold, and the `folds_stratifier` helps ensure that there are a similar number of positive cases in all the folds.
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE, errors = FALSE, results = 'hide'}
+final_df$label <- as.factor(final_df$label)
+final_df$id <- as.factor(final_df$id)
+drop <- c("status")
+df <- final_df
+names(df)[names(df) == "id"] <- "pid"
+best_params <- tune_rf_params(df = df, target = "label", id_col = "pid", risk_time_col = "risk_time", patient_count_col = "int.n", time_col = "cpiu", drop = drop, ntree_trys = c(100, 200), nodedepth_trys = c("NULL", 3), nsplit_trys = c(5, 10), n.folds = 3, folds_stratifier = "status")
+```
+
+Let's take a look at the output so we can pick a parameter set. Based on the table, we'd say that 100 trees, NULL nodedepth, and an nsplit value of 5 give the best results.
+```{r}
+best_params
+```
+
+Let's train the final model using the optimal parameters and then look at feature importance, calibration, and an rpart summary tree. In addition, here we calibrate the final trained model using the `calibrate.model()` function.
+```{r}
+forest <- create_model(df[,!(names(df) %in% drop[drop != sym("death")])], "label", "pid", "risk_time", "int.n", "cpiu", ntree = 100, nodedepth = NULL, nsplit = 5)
+
+mymodel.1.full_1day <- forest$model
+p.cpiu.be.ppl_1day <- forest$preds
+
+df$p.hat <- calibrate.model(p.cpiu.be.ppl_1day, df, "label", "cpiu")
+analysis_vars <- colnames(df %>% select(-c(pid, status, label, risk_time, int.n)))
+analysis_plots(df, "label", "pid", "p.hat", "cpiu", analysis_vars)
+
+feature_importance_plot(mymodel.1.full_1day, var_key, importance_threshold = 10) #plot feature importance
+```
+
+## Interpretation of Plots
+### Calibration 
+The calibration plot shows the relationship between the predicted and observed event probabilities. In particular, a well calibrated model will be one where the values align and a straight line forms on the dotted line in the plot. Here, we see that there are times where we deviate and under predict the event probability, but overall this is satisfactory.
+
+### Rpart Tree
+The rpart tree is a summary representation of the random forest using a single tree. In particular, it is the result of training a regression tree on the outputted predicted probabilities. Then, we plot a visual representation of the tree so we can understand the predictions. This is a particularly useful technique for clinicians looking to understand their models.
+
+Here, we can see that the bilirunbin value is most important since it is the tope splitting variable. Then edema is second in importance, at the second level of the tree, after which the tree begins to get relatively more complicated. 
+
+### Feature Importance
+The feature importance plot shows the percentage of trees each variable is present in in the random forest. The more trees the variable is in, the more often it is used for splitting when making predictions, and thus the more important it is. As we might expect, the top variables we see in the plot line up with the most important variables according to the rpart trees, such as the bilirunbin and edema values.
+
+
