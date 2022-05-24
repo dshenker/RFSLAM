@@ -14,6 +14,18 @@ The task we are trying to solve is to predict the death of a patient within the 
 
 To begin, let's load some packages we will need for the data processing, as well as RF-SLAM itself.
 
+To get the RFSLAM source code, run the following command:
+```{r}
+install_github("mattrosen/RFSLAM")
+```
+
+Then, to get the forward facing functions which we will use in the vigentte, run the following command:
+```{r}
+install_github("dshenker/RFSLAM")
+```
+
+At this point, both RFSLAM packages should be installed and we can proceed to loading in the other necessary packages.
+
 ```{r}
 library(ggRandomForests)
 library(rfSLAM)
