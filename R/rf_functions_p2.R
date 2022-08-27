@@ -6,18 +6,18 @@
 #' @param target String variable containing the name of the target
 #' @param patient_count_col String variable containing the name of the column couting the patient number
 #' @return a dataframe with a row for each CPIU and its smoothed AUC value
-auc.smooth <- function(data, auc, target, patient_count_col){
+auc.smooth <- function(data, auc, target, time_col){
   data[, target] <- as.numeric(as.character(data[, target]))
-  names(data)[names(data) == patient_count_col] <- "int.n"
+  names(data)[names(data) == time_col] <- "cpiu"
   names(data)[names(data) == target] <- "target"
   boot.df.rep <- data
 
-  events.df <- boot.df.rep %>% dplyr::group_by(int.n) %>% dplyr::summarise(pos = sum(target))
+  events.df <- boot.df.rep %>% dplyr::group_by(cpiu) %>% dplyr::summarise(pos = sum(target))
   events.df <- as.data.frame(events.df)
   events.df.pos <- events.df %>% filter(pos > 0 )
   auc.df <- auc
-  names(auc.df)[1] <- "int.n"
-  events.df.pos <- left_join(auc.df, events.df.pos, by = "int.n")
+  names(auc.df)[1] <- "cpiu"
+  events.df.pos <- left_join(auc.df, events.df.pos, by = "cpiu")
   events.df.pos$auc <- ifelse(events.df.pos$auc>0.95, 0.95, events.df.pos$auc)
   events.df.pos$auc <- ifelse(events.df.pos$auc<0.05, 0.05, events.df.pos$auc)
   events.df.pos <- events.df.pos %>% mutate(var = (auc)*(1-auc)/pos)
@@ -34,18 +34,18 @@ auc.smooth <- function(data, auc, target, patient_count_col){
 #' @param patient_count_col String variable containing the name of the column couting the patient number
 #' @return a weighted average of the time varying CPIU values using weighting based on the number of patients available in each CPIU
 #' @export
-auc.smooth.return.single <- function(data, auc, target, patient_count_col){
+auc.smooth.return.single <- function(data, auc, target, time_col){
   data[, target] <- as.numeric(as.character(data[, target]))
-  names(data)[names(data) == patient_count_col] <- "int.n"
+  names(data)[names(data) == time_col] <- "cpiu"
   names(data)[names(data) == target] <- "target"
   boot.df.rep <- data
 
-  events.df <- boot.df.rep %>% dplyr::group_by(int.n) %>% dplyr::summarise(pos = sum(target))
+  events.df <- boot.df.rep %>% dplyr::group_by(cpiu) %>% dplyr::summarise(pos = sum(target))
   events.df <- as.data.frame(events.df)
   events.df.pos <- events.df %>% filter(pos > 0 )
   auc.df <- auc
-  names(auc.df)[1] <- "int.n"
-  events.df.pos <- left_join(auc.df, events.df.pos, by = "int.n")
+  names(auc.df)[1] <- "cpiu"
+  events.df.pos <- left_join(auc.df, events.df.pos, by = "cpiu")
   events.df.pos$auc <- ifelse(events.df.pos$auc>0.95, 0.95, events.df.pos$auc)
   events.df.pos$auc <- ifelse(events.df.pos$auc<0.05, 0.05, events.df.pos$auc)
   events.df.pos <- events.df.pos %>% mutate(var = (auc)*(1-auc)/pos)
@@ -62,17 +62,17 @@ auc.smooth.return.single <- function(data, auc, target, patient_count_col){
 #' @param time_col String variable containing the name of the column holding the CPIU number
 #' @return time varying AUC dataframe with one column for the CPIU and another for the AUC
 #' @export
-rf.auc <- function(sca1.df = data, target, patient_count_col, time_col){
-  names(sca1.df)[names(sca1.df) == patient_count_col] <- "int.n"
+rf.auc <- function(sca1.df = data, target, time_col){
+  #names(sca1.df)[names(sca1.df) == time_col] <- "int.n"
   names(sca1.df)[names(sca1.df) == target] <- "target"
-  names(sca1.df)[names(sca1.df) == time_col] <- "q6"
+  names(sca1.df)[names(sca1.df) == time_col] <- "cpiu"
   index <- which(sca1.df$target == 1)# find all intervals where sca occurs
-  times <- sca1.df[index, "q6"] # obtain times
+  times <- sca1.df[index, "cpiu"] # obtain times
   status <- sca1.df[,"target"] # 0/1 indicators
-  int <- sca1.df[index, "int.n"] # interval numbers for sca
+  #int <- sca1.df[index, "int.n"] # interval numbers for sca
   n <- length(index)
 
-  int <- int[order(times)] # order the event times
+  int <- times[order(times)] # order the event times
   int <- unique(int)
   n <- length(int)
 
@@ -80,7 +80,7 @@ rf.auc <- function(sca1.df = data, target, patient_count_col, time_col){
 
   for(i in 1:n){
 
-    int.index <- which(sca1.df$int.n == int[i]) # only consider individuals at risk at the current interval in consideration
+    int.index <- which(sca1.df$cpiu == int[i]) # only consider individuals at risk at the current interval in consideration
     chf <- sca1.df[int.index, c("pid", "target", "p.hat")]
     auc.df.p[i,2] <- auc(chf$target, chf$p.hat)
     auc.df.p[i,3] <- nrow(chf)
@@ -201,7 +201,7 @@ risk.adjust.new.be <- function(rf, status, rt, new_data, k = 2, alpha.tm = 0.05)
 analysis_plots <- function(rf.df.1, target, id_col, risk_col, time_col, vars_list) {
   set.seed(321)
 
-  db2 <- rf.df.1 %>% mutate(ni.sca = (as.numeric(rf.df.1[,target]) - 1)) %>% mutate(i.sca = rf.df.1[,target]) %>% mutate(timescd = as.numeric(rf.df.1[,time_col])) %>% mutate(int.n = as.numeric(rf.df.1[,time_col]))
+  db2 <- rf.df.1 %>% mutate(ni.sca = (as.numeric(rf.df.1[,target]) - 1)) %>% mutate(i.sca = rf.df.1[,target]) %>% mutate(timescd = as.numeric(rf.df.1[,time_col]))
   db2$pid <- rf.df.1[,id_col]
   db2$p.hat <- rf.df.1[,risk_col]
 
@@ -273,7 +273,6 @@ feature_importance_plot <- function(mymodel.1.full, var_key, importance_threshol
   var.used <- data.frame(Variable = names(var.tree.sumC), perc_tree = unname(var.tree.sumC)) %>% filter(perc_tree>importance_threshold)
 
   var.used <- left_join(var.used,var_key, by = "Variable")
-
   p1 <- ggplot(data = var.used, aes(x=reorder(Key,perc_tree), y = perc_tree, fill = Type)) +  geom_bar(stat="identity", color = "black") + theme_bw() + coord_flip()
 
   p1 + scale_fill_npg() + scale_y_continuous(limits = c(0,100), expand = c(0,0), breaks = seq(0, 100, by = 10)) + xlab("") +
@@ -296,13 +295,13 @@ feature_importance_plot <- function(mymodel.1.full, var_key, importance_threshol
 #' @param nodedepth the node depth for random forest
 #' @param nsplit the nsplit parameter for random forest
 #' @return the RF-SLAM model, the predicted risk values (uncalibrated) together in a list that you can index into using the `model` and `preds` arguments
-create_model <- function(modeling_df, target, id_col, risk_time_col, patient_count_col = "int.n", time_col, ntree = 100, nodedepth = NULL, nsplit = 10) {
+create_model <- function(modeling_df, target, id_col, risk_time_col, time_col, ntree = 100, nodedepth = NULL, nsplit = 10) {
 
-  rfslam.samp.1 <- boot.samp(ntree = ntree, id = unique(modeling_df[,id_col]), boot.df.rep = modeling_df %>% select(-c(risk_time_col)), id_col = id_col, time_unit_col = patient_count_col)
+  rfslam.samp.1 <- boot.samp(ntree = ntree, id = unique(modeling_df[,id_col]), boot.df.rep = modeling_df %>% select(-c(risk_time_col)), id_col = id_col, time_unit_col = time_col)
   node.size <- round((dim(modeling_df %>% select(-c(id_col, risk_time_col)))[1])*0.1)
 
   mymodel.1.full <- rfSLAM::rfsrc(as.formula(paste(target, "~", ".")), data = modeling_df
-                                  %>% select(-c(id_col, risk_time_col, patient_count_col)), nodesize = node.size, ntree =  ntree, nodedepth = nodedepth, nsplit = nsplit,
+                                  %>% select(-c(id_col, risk_time_col)), nodesize = node.size, ntree =  ntree, nodedepth = nodedepth, nsplit = nsplit,
                                   na.action = "na.impute", splitrule= "poisson.split1", risk.time = modeling_df[, risk_time_col],
                                   stratifier=modeling_df[,time_col], membership=TRUE,bootstrap = "by.user", samp = rfslam.samp.1, var.used = "by.tree", importance = TRUE)
 
@@ -326,7 +325,7 @@ create_model <- function(modeling_df, target, id_col, risk_time_col, patient_cou
 #' @param nodedepth the node depth for random forest
 #' @param nsplit the nsplit parameter for random forest
 #' @return the average weighted auc value across all of the folds
-cv_model_with_auc <- function(modeling_df, target, id_col, risk_time_col, patient_count_col = "int.n", time_col, n.folds,folds_stratifier, drop, ntree = 100, nodedepth = NULL, nsplit = 10) {
+cv_model_with_auc <- function(modeling_df, target, id_col, risk_time_col, time_col, n.folds,folds_stratifier, drop, ntree = 100, nodedepth = NULL, nsplit = 10) {
   all_auc <- c()
   data_for_folds <-  modeling_df %>% select(!!folds_stratifier, !!id_col) %>% distinct(.)
   folds <- caret::createFolds(data_for_folds[,folds_stratifier], k = n.folds, list = FALSE)
@@ -336,13 +335,13 @@ cv_model_with_auc <- function(modeling_df, target, id_col, risk_time_col, patien
   fold_number <- 1:n.folds
   drop <- c(drop, "fold")
   drop_check <<- drop
-  get_fold_auc <- function(j, .modeling_df = modeling_df, .target = target, .id_col = id_col, .drop = drop, .risk_time_col = risk_time_col, .time_col = time_col, .patient_count_col = patient_count_col, .ntree = ntree, .nodedepth = nodedepth, .nsplit = nsplit) {
+  get_fold_auc <- function(j, .modeling_df = modeling_df, .target = target, .id_col = id_col, .drop = drop, .risk_time_col = risk_time_col, .time_col = time_col, .ntree = ntree, .nodedepth = nodedepth, .nsplit = nsplit) {
     train <- .modeling_df %>% filter(fold == j)
     test <- .modeling_df %>% filter(fold != j)
     test <- rbind(train[1, ] , test)
     test <- test[-1,]
 
-    model_pieces <- create_model(train[,!(names(train) %in% .drop[.drop != sym(.target)])], .target, .id_col, .risk_time_col , .patient_count_col, .time_col, .ntree, .nodedepth, .nsplit)
+    model_pieces <- create_model(train[,!(names(train) %in% .drop[.drop != sym(.target)])], .target, .id_col, .risk_time_col , .time_col, .ntree, .nodedepth, .nsplit)
     rf <- model_pieces$model
     test <-  test %>% select(-c(fold))
 
@@ -354,7 +353,7 @@ cv_model_with_auc <- function(modeling_df, target, id_col, risk_time_col, patien
 
     test$p.hat <- risk.adjust.new.be(rf, train[,.target], train[,.risk_time_col], test[,!(names(test) %in% c(.drop, .target))])
     test_check <<- test
-    auc_fold <- auc.smooth.return.single(test, rf.auc(test, .target, .patient_count_col, .time_col), .target, .patient_count_col)
+    auc_fold <- auc.smooth.return.single(test, rf.auc(test, .target, .time_col), .target, .time_col)
     return(auc_fold)
   }
 
@@ -380,19 +379,19 @@ cv_model_with_auc <- function(modeling_df, target, id_col, risk_time_col, patien
 #' @param n.folds the number of folds to use for cross validation
 #' @param folds_stratifier the variable to use for creating the folds
 #' @return a table showing all combinations of the parameter values and their associated cross validated weighted auc value
-tune_rf_params <- function(df, target, id_col, risk_time_col, patient_count_col = "int.n", time_col, drop, ntree_trys = c(50, 100, 200, 500), nodedepth_trys = c(NULL, 3, 5), nsplit_trys = c(5, 10, 15), n.folds = 5, folds_stratifier) {
+tune_rf_params <- function(df, target, id_col, risk_time_col, time_col, drop, ntree_trys = c(50, 100, 200, 500), nodedepth_trys = c(NULL, 3, 5), nsplit_trys = c(5, 10, 15), n.folds = 5, folds_stratifier) {
 
   parameter_combos <- expand.grid(n_trees = ntree_trys, nodedepth = nodedepth_trys, nsplit = nsplit_trys)
 
   get_combo_auc <- function(n_tree, nodedepth, nsplit, .df = df, .target = target, .id_col = id_col, .risk_time_col = risk_time_col,
-                            .patient_count_col = patient_count_col, .time_col = time_col, .n.folds = n.folds, .drop = drop, .folds_stratifier = folds_stratifier) {
+                            .time_col = time_col, .n.folds = n.folds, .drop = drop, .folds_stratifier = folds_stratifier) {
     if (nodedepth == "NULL") {
       nodedepth <- NULL
     }
     else {
       nodedepth <- as.numeric(as.character(nodedepth))
     }
-    curr_model_auc <- cv_model_with_auc(.df, .target, .id_col, .risk_time_col, .patient_count_col, .time_col, n.folds = .n.folds,
+    curr_model_auc <- cv_model_with_auc(.df, .target, .id_col, .risk_time_col, .time_col, n.folds = .n.folds,
                                         drop = .drop, folds_stratifier = .folds_stratifier, ntree = n_tree, nodedepth = nodedepth, nsplit = nsplit)
 
     avg_curr_auc <- mean(unlist(curr_model_auc))

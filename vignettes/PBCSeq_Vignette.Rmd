@@ -3,6 +3,11 @@ title: "PC"
 output: html_document
 ---
 
+#NOTES:
+# - check if we need int.n
+# - check typos with ODI
+# - add additions to the variable key
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
@@ -16,12 +21,14 @@ To begin, let's load some packages we will need for the data processing, as well
 
 To get the RFSLAM source code, run the following command:
 ```{r}
+set.seed(100) #set a seed for reproducibility
+library(devtools)
 install_github("mattrosen/RFSLAM")
 ```
 
 Then, to get the forward facing functions which we will use in the vigentte, run the following command:
 ```{r}
-install_github("dshenker/RFSLAM")
+#install_github("dshenker/RFSLAM")
 ```
 
 At this point, both RFSLAM packages should be installed and we can proceed to loading in the other necessary packages.
@@ -107,7 +114,7 @@ test <- full_df %>% full_join(pbc_tomerge, by = c("id", "day"))
 test <- arrange(test, id, day)
 ```
 
-fix this one weird issue (NOTE TO DANIEL: INVESTIGATE LATER)
+Because of the way we fill in, we need to manually set the cpiu value for the very first row.
 ```{r}
 test[1, "cpiu"] <- 1
 ```
@@ -135,6 +142,8 @@ test[(test$next_id == test$id) & (test$death == 1), "death"] <- 0
 test <- test %>% select(-c(next_death))
 
 test$risk_time <- ifelse(test$risk_time == 0, 1, test$risk_time)
+
+test <- test %>% select(-c(next_id))
 ```
 
 Now, one naive approach to modeling the task is to predict whether a patient will die based on the current row's data. However, a more informative task is to create labels using look-ahead, and ask if a patient is going to die 300 days into the future. The code block below creates labels that do exactly that.
@@ -154,9 +163,9 @@ Finally, let's do some data cleaning to turn `sex` into a numeric value and crea
 ```{r}
 final_df$sex <- ifelse(final_df$sex == 'f', 1, 0)
 
-final_df <- final_df %>% select(-c(next_id, death))
+final_df <- final_df %>% select(-c(death))
 
-final_df$int.n <- final_df$cpiu
+#final_df$int.n <- final_df$cpiu
 final_df <- filter(final_df, !duplicated(final_df[,c("id", "label")]) | label == 0) #ask about whether we should do this step or not
 
 final_df$days_since_cpiu_start <- final_df$day - (final_df$cpiu - 1)*100
@@ -164,7 +173,7 @@ final_df$days_since_cpiu_start <- final_df$day - (final_df$cpiu - 1)*100
 
 We are now ready to actually use RF-SLAM for modeling. In addition to the labels and features for modeling, RF-SLAM needs to know where to find the patient id's, risk times, CPIU values, and how to create folds for cross validation. Here, we use the `status` variable, which denotes whether or not a patient died EVER in order to have consistency across creating folds. 
 
-Then, we can use the `turn_rf_params()` function to test different user-specified parameter combinations to summarize how the AUC values vary across them. In particular, RF-SLAM returns a weighted average of the time-varying AUC's under each parameter combination where the values are weighted based on the number of patients available in each particular CPIU. A detailed description of each parameter is as follows:
+Then, we can use the `tune_rf_params()` function to test different user-specified parameter combinations to summarize how the AUC values vary across them. In particular, RF-SLAM returns a weighted average of the time-varying AUC's under each parameter combination where the values are weighted based on the number of patients available in each particular CPIU. A detailed description of each parameter is as follows:
 - df: the dataframe 
 - target: the name of the column with the target variable values
 - id_col: the name of the column with the patient id's
@@ -184,7 +193,7 @@ final_df$id <- as.factor(final_df$id)
 drop <- c("status")
 df <- final_df
 names(df)[names(df) == "id"] <- "pid"
-best_params <- tune_rf_params(df = df, target = "label", id_col = "pid", risk_time_col = "risk_time", patient_count_col = "int.n", time_col = "cpiu", drop = drop, ntree_trys = c(100, 200), nodedepth_trys = c("NULL", 3), nsplit_trys = c(5, 10), n.folds = 3, folds_stratifier = "status")
+best_params <- tune_rf_params(df = df, target = "label", id_col = "pid", risk_time_col = "risk_time", time_col = "cpiu", drop = drop, ntree_trys = c(100, 200), nodedepth_trys = c("NULL", 3), nsplit_trys = c(5, 10), n.folds = 3, folds_stratifier = "status")
 ```
 
 Let's take a look at the output so we can pick a parameter set. Based on the table, we'd say that 100 trees, NULL nodedepth, and an nsplit value of 5 give the best results.
@@ -194,13 +203,13 @@ best_params
 
 Let's train the final model using the optimal parameters and then look at feature importance, calibration, and an rpart summary tree. In addition, here we calibrate the final trained model using the `calibrate.model()` function.
 ```{r}
-forest <- create_model(df[,!(names(df) %in% drop[drop != sym("death")])], "label", "pid", "risk_time", "int.n", "cpiu", ntree = 100, nodedepth = NULL, nsplit = 5)
+forest <- create_model(df[,!(names(df) %in% drop[drop != sym("death")])], "label", "pid", "risk_time", "cpiu", ntree = 100, nodedepth = NULL, nsplit = 5)
 
 mymodel.1.full_1day <- forest$model
 p.cpiu.be.ppl_1day <- forest$preds
 
 df$p.hat <- calibrate.model(p.cpiu.be.ppl_1day, df, "label", "cpiu")
-analysis_vars <- colnames(df %>% select(-c(pid, status, label, risk_time, int.n)))
+analysis_vars <- colnames(df %>% select(-c(pid, status, label, risk_time)))
 analysis_plots(df, "label", "pid", "p.hat", "cpiu", analysis_vars)
 
 feature_importance_plot(mymodel.1.full_1day, var_key, importance_threshold = 10) #plot feature importance
@@ -213,7 +222,7 @@ The calibration plot shows the relationship between the predicted and observed e
 ### Rpart Tree
 The rpart tree is a summary representation of the random forest using a single tree. In particular, it is the result of training a regression tree on the outputted predicted probabilities. Then, we plot a visual representation of the tree so we can understand the predictions. This is a particularly useful technique for clinicians looking to understand their models.
 
-Here, we can see that the bilirunbin value is most important since it is the tope splitting variable. Then edema is second in importance, at the second level of the tree, after which the tree begins to get relatively more complicated. 
+Here, we can see that the bilirunbin value is most important since it is the top splitting variable. Then edema is second in importance, at the second level of the tree, after which the tree begins to get relatively more complicated. 
 
 ### Feature Importance
 The feature importance plot shows the percentage of trees each variable is present in in the random forest. The more trees the variable is in, the more often it is used for splitting when making predictions, and thus the more important it is. As we might expect, the top variables we see in the plot line up with the most important variables according to the rpart trees, such as the bilirunbin and edema values.
