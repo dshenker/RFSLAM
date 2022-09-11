@@ -3,11 +3,6 @@ title: "PC"
 output: html_document
 ---
 
-#NOTES:
-# - check if we need int.n
-# - check typos with ODI
-# - add additions to the variable key
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
